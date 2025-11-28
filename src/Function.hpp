@@ -66,6 +66,15 @@ std::map<uint32_t, std::vector<PortBlock>> Optimal_for_Port_Table(
     const std::map<uint32_t, std::vector<MergedItem>>& metainfo
 );
 
+void Create_Port_Block_Subset(
+    const std::map<uint32_t, std::vector<PortBlock>>& optimal_metainfo,
+    std::vector<PortBlock>& PortBlock_Subset
+);
+
+std::vector<LRME_Entry> Caculate_LRME_Enries(
+    const std::vector<PortBlock>& PortBlock_Subset
+);
+
 void Caculate_LRME_for_Port_Table(
     const std::map<uint32_t, std::vector<MergedItem>>& metainfo
 );

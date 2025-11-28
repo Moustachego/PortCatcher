@@ -234,9 +234,6 @@ std::map<uint32_t, std::vector<PortBlock>> Optimal_for_Port_Table(
         optimal_metainfo[lrmid] = port_blocks;
     }
     
-    std::cout << "[Optimal_for_Port_Table] Optimized " << optimal_metainfo.size() 
-              << " LRMIDs" << std::endl;
-    
     return optimal_metainfo;
 }
 
@@ -252,11 +249,11 @@ void Create_Port_Block_Subset(
         
         for (const auto& block : port_blocks) {
             // 处理特殊情况：端口为 0 表示全端口（0-65535）
-            bool src_is_full = (block.Src_Port_lo == 0 && block.Src_Port_hi == 0);
-            bool dst_is_full = (block.Dst_Port_lo == 0 && block.Dst_Port_hi == 0);
+            bool src_is_any = (block.Src_Port_lo == 0 && block.Src_Port_hi == 0);
+            bool dst_is_any = (block.Dst_Port_lo == 0 && block.Dst_Port_hi == 0);
             
             // 如果源端口和目标端口都是全端口，保存原规则
-            if (src_is_full && dst_is_full) {
+            if (src_is_any && dst_is_any) {
                 PortBlock_Subset.push_back(block);
                 continue;
             }
@@ -266,7 +263,7 @@ void Create_Port_Block_Subset(
             std::vector<std::pair<uint16_t, uint16_t>> dst_blocks;
             
             // 分块源端口范围
-            if (src_is_full) {
+            if (src_is_any) {
                 // 全端口不分块，直接使用 0
                 src_blocks.push_back({0, 0});
             } else {
@@ -298,7 +295,7 @@ void Create_Port_Block_Subset(
             }
             
             // 分块目标端口范围
-            if (dst_is_full) {
+            if (dst_is_any) {
                 // 全端口不分块，直接使用 0
                 dst_blocks.push_back({0, 0});
             } else {
@@ -351,6 +348,76 @@ void Create_Port_Block_Subset(
               << " port block subsets (split by 32-port intervals)" << std::endl;
 }
 
+
+std::vector<LRME_Entry> Caculate_LRME_Enries(
+    const std::vector<PortBlock>& PortBlock_Subset
+) {
+    std::vector<LRME_Entry> LRME_Entries;
+    LRME_Entries.clear();
+
+    // 遍历每个 PortBlock，生成对应的 LRME_Entry
+    for (const auto& block : PortBlock_Subset) {
+        LRME_Entry entry;
+        entry.LRMID = block.LRMID;
+
+        // 处理源端口
+        if (block.Src_Port_lo == 0 && block.Src_Port_hi == 0) {
+            // ANY port (0-65535)：使用特殊标记
+            entry.SrcPAI = 0xFFFF;  // 特殊值表示 ANY
+            entry.Src_32bitmap = 0;  // 用 0 表示 null/ANY，不设置具体位
+        } else {
+            // 计算 PAI：端口所在的 32 区间编号
+            // 因为已经按 32 分块，lo 和 hi 在同一个区间
+            entry.SrcPAI = static_cast<uint16_t>(block.Src_Port_lo / 32);
+            
+            // 计算 32-bit bitmap
+            // block_base 是当前 32 区间的起始端口
+            uint32_t block_base = entry.SrcPAI * 32;
+            entry.Src_32bitmap = 0;
+            
+            // 计算需要设置的位范围（端口 % 32）
+            uint32_t start_bit = block.Src_Port_lo - block_base;  // lo % 32
+            uint32_t end_bit = block.Src_Port_hi - block_base;    // hi % 32
+            
+            // 设置 bitmap 的对应位
+            for (uint32_t bit = start_bit; bit <= end_bit; ++bit) {
+                entry.Src_32bitmap |= (1U << bit);
+            }
+        }
+
+        // 处理目标端口（逻辑同源端口）
+        if (block.Dst_Port_lo == 0 && block.Dst_Port_hi == 0) {
+            // ANY port (0-65535)：使用特殊标记
+            entry.DstPAI = 0xFFFF;  // 特殊值表示 ANY
+            entry.Dst_32bitmap = 0;  // 用 0 表示 null/ANY
+        } else {
+            // 计算 PAI：端口所在的 32 区间编号
+            entry.DstPAI = static_cast<uint16_t>(block.Dst_Port_lo / 32);
+            
+            // 计算 32-bit bitmap
+            uint32_t block_base = entry.DstPAI * 32;
+            entry.Dst_32bitmap = 0;
+            
+            // 计算需要设置的位范围（端口 % 32）
+            uint32_t start_bit = block.Dst_Port_lo - block_base;  // lo % 32
+            uint32_t end_bit = block.Dst_Port_hi - block_base;    // hi % 32
+            
+            // 设置 bitmap 的对应位
+            for (uint32_t bit = start_bit; bit <= end_bit; ++bit) {
+                entry.Dst_32bitmap |= (1U << bit);
+            }
+        }
+
+        LRME_Entries.push_back(entry);
+    }
+
+    std::cout << "[Caculate_LRME_Enries] Created " << LRME_Entries.size() 
+              << " LRME entries from PortBlock subset" << std::endl;
+
+    return LRME_Entries;
+}
+
+
 void Caculate_LRME_for_Port_Table(
     const std::map<uint32_t, std::vector<MergedItem>>& metainfo) 
 {
@@ -362,7 +429,7 @@ void Caculate_LRME_for_Port_Table(
     Create_Port_Block_Subset(optimal_metainfo, PortBlock);
 
     // 3) Create LRME entries for PortBlock subset
-    
+    auto PortBlock_LRME = Caculate_LRME_Enries(PortBlock);
 }
 
 
