@@ -1,0 +1,51 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "build-debug",
+            "type": "shell",
+            "command": "g++",
+            "args": [
+                "-std=c++11",
+                "-g",
+                "-O0",
+                "-o",
+                "portcatcher",
+                "src/PortCatcher.cpp",
+                "src/Loader.cpp",
+                "src/Function.cpp"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": ["$gcc"],
+            "detail": "编译 PortCatcher (Debug 模式)"
+        },
+        {
+            "label": "build-release",
+            "type": "shell",
+            "command": "g++",
+            "args": [
+                "-std=c++11",
+                "-O2",
+                "-o",
+                "portcatcher",
+                "src/PortCatcher.cpp",
+                "src/Loader.cpp",
+                "src/Function.cpp"
+            ],
+            "group": "build",
+            "problemMatcher": ["$gcc"],
+            "detail": "编译 PortCatcher (Release 模式)"
+        },
+        {
+            "label": "clean",
+            "type": "shell",
+            "command": "rm",
+            "args": ["-f", "portcatcher"],
+            "problemMatcher": [],
+            "detail": "清理编译产物"
+        }
+    ]
+}

@@ -12,7 +12,7 @@ echo -e "${GREEN}=== PortCatcher 构建与运行脚本 ===${NC}\n"
 
 # 编译项目
 echo -e "${YELLOW}[1] 编译项目...${NC}"
-g++ -std=c++11 -o portcatcher src/PortCatcher.cpp src/Loader.cpp
+g++ -std=c++11 -o portcatcher src/PortCatcher.cpp src/Loader.cpp src/Function.cpp
 
 if [ $? -ne 0 ]; then
     echo -e "${RED}[错误] 编译失败！${NC}"

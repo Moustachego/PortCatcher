@@ -1,0 +1,34 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug PortCatcher (lldb)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/portcatcher",
+            "args": [],
+            "cwd": "${workspaceFolder}",
+            "preLaunchTask": "build-debug",
+            "terminal": "integrated"
+        },
+        {
+            "name": "Debug PortCatcher with custom rules (lldb)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/portcatcher",
+            "args": ["src/ACL_rules/test.rules"],
+            "cwd": "${workspaceFolder}",
+            "preLaunchTask": "build-debug",
+            "terminal": "integrated"
+        },
+        {
+            "name": "Debug PortCatcher (no build)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/portcatcher",
+            "args": [],
+            "cwd": "${workspaceFolder}",
+            "terminal": "integrated"
+        }
+    ]
+}

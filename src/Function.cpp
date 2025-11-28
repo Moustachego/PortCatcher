@@ -66,20 +66,304 @@ void merge_same_ip_entry(
 }
 
 
+void Create_metainfo(
+    const std::vector<MergrdR>& merged_ip_table,
+    const std::vector<PortRule>& port_table,
+    std::map<uint32_t, std::vector<MergedItem>>& metainfo
+) {
+    metainfo.clear();
 
-void laod_and_create_IP_table(
+    // 遍历每个合并后的 IP 规则
+    for (const auto& merged_rule : merged_ip_table) {
+        // 1) 提取 LRMID
+        uint32_t lrmid = merged_rule.LRMID;
+        
+        // 为这个 LRMID 创建 MergedItem 向量
+        std::vector<MergedItem> items;
+        
+        // 2) 遍历 merged_R 中的每个原始规则索引
+        for (size_t orig_idx : merged_rule.merged_R) {
+            // 检查索引是否有效
+            if (orig_idx >= port_table.size()) {
+                std::cerr << "[WARN] Invalid index " << orig_idx 
+                          << " in merged_R (port_table size: " << port_table.size() << ")" << std::endl;
+                continue;
+            }
+            
+            // 3) 从 port_table 中获取对应的端口规则
+            const auto& port_rule = port_table[orig_idx];
+            
+            // 4) 创建 MergedItem 并填充数据
+            MergedItem item;
+            item.LRMID = lrmid;  // 赋予 LRMID
+            item.Src_Port_lo = port_rule.src_port_lo;
+            item.Src_Port_hi = port_rule.src_port_hi;
+            item.Dst_Port_lo = port_rule.dst_port_lo;
+            item.Dst_Port_hi = port_rule.dst_port_hi;
+            item.action = port_rule.action;
+            
+            items.push_back(item);
+        }
+        
+        // 将这个 LRMID 对应的所有端口项添加到 metainfo
+        metainfo[lrmid] = items;
+    }
+
+    std::cout << "[Create_metainfo] Created metainfo for " << metainfo.size() 
+              << " LRMIDs (total port entries: ";
+    size_t total_entries = 0;
+    for (const auto& pair : metainfo) {
+        total_entries += pair.second.size();
+    }
+    std::cout << total_entries << ")" << std::endl;
+}
+
+
+void output_metainfo(
+    const std::map<uint32_t, std::vector<MergedItem>>& metainfo,
+    const std::string& output_file
+) {
+    std::ofstream ofs(output_file);
+    if (!ofs.is_open()) {
+        std::cerr << "[ERROR] Failed to open output file: " << output_file << std::endl;
+        return;
+    }
+
+    // 写入表头
+    ofs << "LRM-ID\tSrc_lo\tSrc_hi\tDst_lo\tDst_hi\tAction\n";
+
+    // 遍历每个 LRMID
+    for (const auto& entry : metainfo) {
+        uint32_t lrmid = entry.first;
+        const auto& items = entry.second;
+
+        // 写入该 LRMID 下的所有端口项
+        for (const auto& item : items) {
+            ofs << lrmid << "\t"
+                << item.Src_Port_lo << "\t"
+                << item.Src_Port_hi << "\t"
+                << item.Dst_Port_lo << "\t"
+                << item.Dst_Port_hi << "\t"
+                << item.action << "\n";
+        }
+    }
+
+    ofs.close();
+    
+    // 统计信息
+    size_t total_entries = 0;
+    for (const auto& entry : metainfo) {
+        total_entries += entry.second.size();
+    }
+    std::cout << "[output_metainfo] Wrote metainfo to: " << output_file 
+              << " (" << total_entries << " entries)" << std::endl;
+}
+
+void load_and_create_IP_table(
     std::vector<IPRule>& ip_table,
     std::vector<PortRule>& port_table, 
     std::vector<MergrdR>& merged_ip_table,
-    std::map<std::tuple<std::vector<int>, int, int>, MergedItem>& mateifno
+    std::map<uint32_t, std::vector<MergedItem>>& metainfo
 ) {
     // 1) merge identical IP entries
     merge_same_ip_entry(ip_table, merged_ip_table);
 
-    
+    // 2) create metainfo for port rules
+    Create_metainfo(merged_ip_table, port_table, metainfo);
+
+    // 3) output metainfo to file
+    output_metainfo(metainfo, "output/metainfo.txt");
 }
 
 
+std::map<uint32_t, std::vector<PortBlock>> Optimal_for_Port_Table(
+    const std::map<uint32_t, std::vector<MergedItem>>& metainfo
+) {
+    std::map<uint32_t, std::vector<PortBlock>> optimal_metainfo;
+    optimal_metainfo.clear();
+    
+    // 遍历所有 LRMID 及其对应的 MergedItem 列表
+    for (const auto& entry : metainfo) {
+        uint32_t lrmid = entry.first;
+        const auto& items = entry.second;
+        
+        std::vector<PortBlock> port_blocks;
+        
+        // 处理每个 MergedItem
+        for (const auto& item : items) {
+            PortBlock block;
+            block.LRMID = lrmid;
+            block.action = item.action;
+            block.REV_Flag = false;  // 默认为 false
+            
+            // 处理源端口范围
+            if (item.Src_Port_lo == 0 && item.Src_Port_hi == 65535) {
+                // 规则1: 0-65535 变为 0
+                block.Src_Port_lo = 0;
+                block.Src_Port_hi = 0;
+            } else if (item.Src_Port_lo == 1024 && item.Src_Port_hi == 65535) {
+                // 规则2: 1024-65535 变为 0-1023，并设置 REV_Flag
+                block.Src_Port_lo = 0;
+                block.Src_Port_hi = 1023;
+                block.REV_Flag = true;
+            } else {
+                // 保持原端口范围
+                block.Src_Port_lo = item.Src_Port_lo;
+                block.Src_Port_hi = item.Src_Port_hi;
+            }
+            
+            // 处理目标端口范围
+            if (item.Dst_Port_lo == 0 && item.Dst_Port_hi == 65535) {
+                // 规则1: 0-65535 变为 0
+                block.Dst_Port_lo = 0;
+                block.Dst_Port_hi = 0;
+            } else if (item.Dst_Port_lo == 1024 && item.Dst_Port_hi == 65535) {
+                // 规则2: 1024-65535 变为 0-1023，并设置 REV_Flag
+                block.Dst_Port_lo = 0;
+                block.Dst_Port_hi = 1023;
+                block.REV_Flag = true;
+            } else {
+                // 保持原端口范围
+                block.Dst_Port_lo = item.Dst_Port_lo;
+                block.Dst_Port_hi = item.Dst_Port_hi;
+            }
+            
+            port_blocks.push_back(block);
+        }
+        
+        optimal_metainfo[lrmid] = port_blocks;
+    }
+    
+    std::cout << "[Optimal_for_Port_Table] Optimized " << optimal_metainfo.size() 
+              << " LRMIDs" << std::endl;
+    
+    return optimal_metainfo;
+}
+
+void Create_Port_Block_Subset(
+    const std::map<uint32_t, std::vector<PortBlock>>& optimal_metainfo,
+    std::vector<PortBlock>& PortBlock_Subset
+) {
+    PortBlock_Subset.clear();
+
+    // 遍历 optimal_metainfo 中的所有 LRMID 和 PortBlock
+    for (const auto& entry : optimal_metainfo) {
+        const auto& port_blocks = entry.second;
+        
+        for (const auto& block : port_blocks) {
+            // 处理特殊情况：端口为 0 表示全端口（0-65535）
+            bool src_is_full = (block.Src_Port_lo == 0 && block.Src_Port_hi == 0);
+            bool dst_is_full = (block.Dst_Port_lo == 0 && block.Dst_Port_hi == 0);
+            
+            // 如果源端口和目标端口都是全端口，保存原规则
+            if (src_is_full && dst_is_full) {
+                PortBlock_Subset.push_back(block);
+                continue;
+            }
+            
+            // 计算源端口和目标端口的分块范围
+            std::vector<std::pair<uint16_t, uint16_t>> src_blocks;
+            std::vector<std::pair<uint16_t, uint16_t>> dst_blocks;
+            
+            // 分块源端口范围
+            if (src_is_full) {
+                // 全端口不分块，直接使用 0
+                src_blocks.push_back({0, 0});
+            } else {
+                uint16_t src_start = block.Src_Port_lo;
+                uint16_t src_end = block.Src_Port_hi;
+                
+                while (src_start <= src_end) {
+                    uint16_t block_start = src_start;
+                    uint16_t block_end;
+                    
+                    // 计算当前 32 的倍数区间
+                    uint16_t sp = src_start / 32;
+                    uint16_t next_boundary = (sp + 1) * 32;
+                    
+                    if (next_boundary > src_end + 1) {
+                        // 当前区间包含结束端口
+                        block_end = src_end;
+                    } else {
+                        // 延伸到下一个 32 的边界
+                        block_end = next_boundary - 1;
+                    }
+                    
+                    src_blocks.push_back({block_start, block_end});
+                    
+                    // 移动到下一个区间
+                    if (block_end == src_end) break;
+                    src_start = block_end + 1;
+                }
+            }
+            
+            // 分块目标端口范围
+            if (dst_is_full) {
+                // 全端口不分块，直接使用 0
+                dst_blocks.push_back({0, 0});
+            } else {
+                uint16_t dst_start = block.Dst_Port_lo;
+                uint16_t dst_end = block.Dst_Port_hi;
+                
+                while (dst_start <= dst_end) {
+                    uint16_t block_start = dst_start;
+                    uint16_t block_end;
+                    
+                    // 计算当前 32 的倍数区间
+                    uint16_t sp = dst_start / 32;
+                    uint16_t next_boundary = (sp + 1) * 32;
+                    
+                    if (next_boundary > dst_end + 1) {
+                        // 当前区间包含结束端口
+                        block_end = dst_end;
+                    } else {
+                        // 延伸到下一个 32 的边界
+                        block_end = next_boundary - 1;
+                    }
+                    
+                    dst_blocks.push_back({block_start, block_end});
+                    
+                    // 移动到下一个区间
+                    if (block_end == dst_end) break;
+                    dst_start = block_end + 1;
+                }
+            }
+            
+            // 生成所有源端口和目标端口的组合
+            for (const auto& src_range : src_blocks) {
+                for (const auto& dst_range : dst_blocks) {
+                    PortBlock new_block;
+                    new_block.LRMID = block.LRMID;
+                    new_block.Src_Port_lo = src_range.first;
+                    new_block.Src_Port_hi = src_range.second;
+                    new_block.Dst_Port_lo = dst_range.first;
+                    new_block.Dst_Port_hi = dst_range.second;
+                    new_block.REV_Flag = block.REV_Flag;
+                    new_block.action = block.action;
+                    
+                    PortBlock_Subset.push_back(new_block);
+                }
+            }
+        }
+    }
+    
+    std::cout << "[Create_Port_Block_Subset] Created " << PortBlock_Subset.size() 
+              << " port block subsets (split by 32-port intervals)" << std::endl;
+}
+
+void Caculate_LRME_for_Port_Table(
+    const std::map<uint32_t, std::vector<MergedItem>>& metainfo) 
+{
+    // 1) Two optimal propose in paper; For ANY port and ports greater than 1024
+    auto optimal_metainfo = Optimal_for_Port_Table(metainfo);
+
+    // 2) Create PortBlock subset
+    std::vector<PortBlock> PortBlock;
+    Create_Port_Block_Subset(optimal_metainfo, PortBlock);
+
+    // 3) Create LRME entries for PortBlock subset
+    
+}
 
 
 
