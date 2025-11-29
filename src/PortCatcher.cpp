@@ -55,7 +55,24 @@ int main(int argc, char **argv)
 
     // Step 4: Create LRME for Port Table
     cout << "[STEP 4] Creating Port Table...\n";
+    std::map<uint32_t, std::vector<PortBlock>> optimal_metainfo = 
     Caculate_LRME_for_Port_Table(metainfo);
     
+    // Step 5: Create REV and LRM-ID set for IP Table
+    cout << "[STEP 5] Creating Final IP Table ...\n";
+    vector<IP_Table_Entry> final_ip_table;
+    create_final_IP_table(merged_ip_table, optimal_metainfo, final_ip_table);
+    
+    cout << "[SUCCESS] Final IP Table created with " << final_ip_table.size() << " entries.\n\n";
 
+    // Step 6: Output Final IP Table to file
+    cout << "[STEP 6] Outputting Final IP Table to file...\n";
+    output_final_IP_table(final_ip_table, "output/IP_table.txt");
+    cout << "[SUCCESS] Final IP Table output completed.\n\n";
+
+    cout << "============================================================================\n";
+    cout << "----------------------------------Completed--------------------------------\n";
+    cout << "============================================================================\n";
+
+    return 0;
 }

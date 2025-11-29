@@ -129,8 +129,15 @@ void output_metainfo(
         return;
     }
 
-    // 写入表头
-    ofs << "LRM-ID\tSrc_lo\tSrc_hi\tDst_lo\tDst_hi\tAction\n";
+    // 写入表头（对齐格式）
+    ofs << std::left 
+        << std::setw(10) << "LRM-ID"
+        << std::setw(10) << "Src_lo"
+        << std::setw(10) << "Src_hi"
+        << std::setw(10) << "Dst_lo"
+        << std::setw(10) << "Dst_hi"
+        << std::setw(10) << "Action"
+        << "\n";
 
     // 遍历每个 LRMID
     for (const auto& entry : metainfo) {
@@ -139,12 +146,14 @@ void output_metainfo(
 
         // 写入该 LRMID 下的所有端口项
         for (const auto& item : items) {
-            ofs << lrmid << "\t"
-                << item.Src_Port_lo << "\t"
-                << item.Src_Port_hi << "\t"
-                << item.Dst_Port_lo << "\t"
-                << item.Dst_Port_hi << "\t"
-                << item.action << "\n";
+            ofs << std::left
+                << std::setw(10) << lrmid
+                << std::setw(10) << item.Src_Port_lo
+                << std::setw(10) << item.Src_Port_hi
+                << std::setw(10) << item.Dst_Port_lo
+                << std::setw(10) << item.Dst_Port_hi
+                << std::setw(10) << item.action
+                << "\n";
         }
     }
 
@@ -195,12 +204,17 @@ std::map<uint32_t, std::vector<PortBlock>> Optimal_for_Port_Table(
             block.LRMID = lrmid;
             block.action = item.action;
             block.REV_Flag = false;  // 默认为 false
+            block.ANY_Flag = 0;      // 默认为 0（不包含 ANY）
+            
+            bool src_is_any = false;
+            bool dst_is_any = false;
             
             // 处理源端口范围
             if (item.Src_Port_lo == 0 && item.Src_Port_hi == 65535) {
                 // 规则1: 0-65535 变为 0
                 block.Src_Port_lo = 0;
                 block.Src_Port_hi = 0;
+                src_is_any = true;
             } else if (item.Src_Port_lo == 1024 && item.Src_Port_hi == 65535) {
                 // 规则2: 1024-65535 变为 0-1023，并设置 REV_Flag
                 block.Src_Port_lo = 0;
@@ -217,6 +231,7 @@ std::map<uint32_t, std::vector<PortBlock>> Optimal_for_Port_Table(
                 // 规则1: 0-65535 变为 0
                 block.Dst_Port_lo = 0;
                 block.Dst_Port_hi = 0;
+                dst_is_any = true;
             } else if (item.Dst_Port_lo == 1024 && item.Dst_Port_hi == 65535) {
                 // 规则2: 1024-65535 变为 0-1023，并设置 REV_Flag
                 block.Dst_Port_lo = 0;
@@ -226,6 +241,21 @@ std::map<uint32_t, std::vector<PortBlock>> Optimal_for_Port_Table(
                 // 保持原端口范围
                 block.Dst_Port_lo = item.Dst_Port_lo;
                 block.Dst_Port_hi = item.Dst_Port_hi;
+            }
+            
+            // 设置 ANY_Flag
+            // 0: 不包含 ANY
+            // 1: 仅源端口是 ANY
+            // 2: 仅目标端口是 ANY
+            // 3: 源端口和目标端口都是 ANY
+            if (src_is_any && dst_is_any) {
+                block.ANY_Flag = 3;
+            } else if (src_is_any) {
+                block.ANY_Flag = 1;
+            } else if (dst_is_any) {
+                block.ANY_Flag = 2;
+            } else {
+                block.ANY_Flag = 0;
             }
             
             port_blocks.push_back(block);
@@ -336,6 +366,7 @@ void Create_Port_Block_Subset(
                     new_block.Dst_Port_lo = dst_range.first;
                     new_block.Dst_Port_hi = dst_range.second;
                     new_block.REV_Flag = block.REV_Flag;
+                    new_block.ANY_Flag = block.ANY_Flag;  // 继承原 block 的 ANY_Flag
                     new_block.action = block.action;
                     
                     PortBlock_Subset.push_back(new_block);
@@ -359,21 +390,20 @@ std::vector<LRME_Entry> Caculate_LRME_Enries(
     for (const auto& block : PortBlock_Subset) {
         LRME_Entry entry;
         entry.LRMID = block.LRMID;
+        entry.ANY_Flag = block.ANY_Flag;  // 继承 PortBlock 的 ANY_Flag
 
         // 处理源端口
         if (block.Src_Port_lo == 0 && block.Src_Port_hi == 0) {
             // ANY port (0-65535)：使用特殊标记
             entry.SrcPAI = 0xFFFF;  // 特殊值表示 ANY
-            entry.Src_32bitmap = 0;  // 用 0 表示 null/ANY，不设置具体位
+            entry.Src_32bitmap.reset();  // 全部置为 0，表示 null/ANY
         } else {
             // 计算 PAI：端口所在的 32 区间编号
-            // 因为已经按 32 分块，lo 和 hi 在同一个区间
             entry.SrcPAI = static_cast<uint16_t>(block.Src_Port_lo / 32);
             
             // 计算 32-bit bitmap
-            // block_base 是当前 32 区间的起始端口
             uint32_t block_base = entry.SrcPAI * 32;
-            entry.Src_32bitmap = 0;
+            entry.Src_32bitmap.reset();  // 先清空所有位
             
             // 计算需要设置的位范围（端口 % 32）
             uint32_t start_bit = block.Src_Port_lo - block_base;  // lo % 32
@@ -381,7 +411,7 @@ std::vector<LRME_Entry> Caculate_LRME_Enries(
             
             // 设置 bitmap 的对应位
             for (uint32_t bit = start_bit; bit <= end_bit; ++bit) {
-                entry.Src_32bitmap |= (1U << bit);
+                entry.Src_32bitmap.set(bit);
             }
         }
 
@@ -389,14 +419,14 @@ std::vector<LRME_Entry> Caculate_LRME_Enries(
         if (block.Dst_Port_lo == 0 && block.Dst_Port_hi == 0) {
             // ANY port (0-65535)：使用特殊标记
             entry.DstPAI = 0xFFFF;  // 特殊值表示 ANY
-            entry.Dst_32bitmap = 0;  // 用 0 表示 null/ANY
+            entry.Dst_32bitmap.reset();  // 全部置为 0，表示 null/ANY
         } else {
             // 计算 PAI：端口所在的 32 区间编号
             entry.DstPAI = static_cast<uint16_t>(block.Dst_Port_lo / 32);
             
             // 计算 32-bit bitmap
             uint32_t block_base = entry.DstPAI * 32;
-            entry.Dst_32bitmap = 0;
+            entry.Dst_32bitmap.reset();  // 先清空所有位
             
             // 计算需要设置的位范围（端口 % 32）
             uint32_t start_bit = block.Dst_Port_lo - block_base;  // lo % 32
@@ -404,7 +434,7 @@ std::vector<LRME_Entry> Caculate_LRME_Enries(
             
             // 设置 bitmap 的对应位
             for (uint32_t bit = start_bit; bit <= end_bit; ++bit) {
-                entry.Dst_32bitmap |= (1U << bit);
+                entry.Dst_32bitmap.set(bit);
             }
         }
 
@@ -412,13 +442,116 @@ std::vector<LRME_Entry> Caculate_LRME_Enries(
     }
 
     std::cout << "[Caculate_LRME_Enries] Created " << LRME_Entries.size() 
-              << " LRME entries from PortBlock subset" << std::endl;
+              << " LRME entries from PortBlock subset (before deduplication)" << std::endl;
+
+    // 去重：合并完全相同的表项
+    // 使用 map 来按 LRMID 分组，然后在每个组内去重
+    std::map<uint32_t, std::vector<LRME_Entry>> grouped_by_lrmid;
+    
+    for (const auto& entry : LRME_Entries) {
+        grouped_by_lrmid[entry.LRMID].push_back(entry);
+    }
+    
+    // 清空原始列表，准备填入去重后的结果
+    LRME_Entries.clear();
+    
+    size_t duplicates_removed = 0;
+    
+    // 对每个 LRMID 组内的表项进行去重
+    for (auto& group_pair : grouped_by_lrmid) {
+        auto& entries = group_pair.second;
+        std::vector<LRME_Entry> unique_entries;
+        
+        for (const auto& entry : entries) {
+            // 检查是否已存在相同的表项
+            bool is_duplicate = false;
+            
+            for (const auto& existing : unique_entries) {
+                // 比较所有关键字段
+                if (existing.LRMID == entry.LRMID &&
+                    existing.ANY_Flag == entry.ANY_Flag &&
+                    existing.SrcPAI == entry.SrcPAI &&
+                    existing.DstPAI == entry.DstPAI &&
+                    existing.Src_32bitmap == entry.Src_32bitmap &&
+                    existing.Dst_32bitmap == entry.Dst_32bitmap) {
+                    is_duplicate = true;
+                    duplicates_removed++;
+                    break;
+                }
+            }
+            
+            // 如果不是重复的，添加到唯一列表
+            if (!is_duplicate) {
+                unique_entries.push_back(entry);
+            }
+        }
+        
+        // 将去重后的表项添加回结果列表
+        for (const auto& entry : unique_entries) {
+            LRME_Entries.push_back(entry);
+        }
+    }
+
+    std::cout << "[Caculate_LRME_Enries] After deduplication: " << LRME_Entries.size() 
+              << " unique entries (removed " << duplicates_removed << " duplicates)" << std::endl;
 
     return LRME_Entries;
 }
 
+void output_LRME_entries(
+    const std::vector<LRME_Entry>& LRME_Entries,
+    const std::string& output_file
+) {
+    std::ofstream ofs(output_file);
+    if (!ofs.is_open()) {
+        std::cerr << "[ERROR] Failed to open output file: " << output_file << std::endl;
+        return;
+    }
 
-void Caculate_LRME_for_Port_Table(
+    // 写入表头（对齐格式）
+    ofs << std::left 
+        << std::setw(10) << "LRMID"
+        << std::setw(10) << "SrcPAI"
+        << std::setw(10) << "DstPAI"
+        << std::setw(35) << "Src_Bitmap"
+        << std::setw(35) << "Dst_Bitmap"
+        << "\n";
+
+    // 遍历每个 LRME_Entry
+    for (const auto& entry : LRME_Entries) {
+        // 将 bitset 转换为字符串
+        // to_string() 默认从高位到低位输出，正好是我们需要的（bit 31在左，bit 0在右）
+        std::string src_bitmap = entry.Src_32bitmap.to_string();
+        std::string dst_bitmap = entry.Dst_32bitmap.to_string();
+
+        // 输出 LRMID（对齐）
+        ofs << std::left << std::setw(10) << entry.LRMID;
+        
+        // 处理 ANY 端口（SrcPAI == 0xFFFF）
+        if (entry.SrcPAI == 0xFFFF) {
+            ofs << std::setw(10) << "ANY";
+        } else {
+            ofs << std::setw(10) << entry.SrcPAI;
+        }
+        
+        if (entry.DstPAI == 0xFFFF) {
+            ofs << std::setw(10) << "ANY";
+        } else {
+            ofs << std::setw(10) << entry.DstPAI;
+        }
+        
+        ofs << std::setw(35) << src_bitmap 
+            << std::setw(35) << dst_bitmap 
+            << "\n";
+    }
+
+    ofs.close();
+    std::cout << "[output_LRME_entries] Wrote " << LRME_Entries.size() 
+              << " LRME entries to: " << output_file << std::endl;
+}
+
+
+std::map<uint32_t, std::vector<PortBlock>> Caculate_LRME_for_Port_Table(
     const std::map<uint32_t, std::vector<MergedItem>>& metainfo) 
 {
     // 1) Two optimal propose in paper; For ANY port and ports greater than 1024
@@ -430,9 +563,210 @@ void Caculate_LRME_for_Port_Table(
 
     // 3) Create LRME entries for PortBlock subset
     auto PortBlock_LRME = Caculate_LRME_Enries(PortBlock);
+
+    // 4) Output Port LRME entries to file
+    output_LRME_entries(PortBlock_LRME, "output/Port_table.txt");
+
+    // 5) Return optimal_metainfo
+    return optimal_metainfo;
 }
 
+// 辅助函数：将 uint32_t IP 地址转换为点分十进制字符串
+std::string ip_to_string(uint32_t ip) {
+    std::ostringstream oss;
+    oss << ((ip >> 24) & 0xFF) << "."
+        << ((ip >> 16) & 0xFF) << "."
+        << ((ip >> 8) & 0xFF) << "."
+        << (ip & 0xFF);
+    return oss.str();
+}
 
+// 辅助函数：根据 IP 范围计算 CIDR 表示
+std::string ip_range_to_cidr(uint32_t ip_lo, uint32_t ip_hi) {
+    // 如果 lo == hi，表示单个 IP
+    if (ip_lo == ip_hi) {
+        return ip_to_string(ip_lo) + "/32";
+    }
+    
+    // 计算掩码长度
+    uint32_t diff = ip_hi - ip_lo + 1;
+    int prefix_len = 32;
+    
+    // 检查是否是标准的 CIDR 块
+    if ((diff & (diff - 1)) == 0) {  // 是 2 的幂
+        prefix_len = 32 - __builtin_ctz(diff);  // 计算前导零的数量
+        
+        // 检查 ip_lo 是否对齐
+        if ((ip_lo & (diff - 1)) == 0) {
+            return ip_to_string(ip_lo) + "/" + std::to_string(prefix_len);
+        }
+    }
+    
+    // 非标准 CIDR，返回范围表示
+    return ip_to_string(ip_lo) + "-" + ip_to_string(ip_hi);
+}
+
+void create_final_IP_table(
+    const std::vector<MergrdR>& merged_ip_table,
+    const std::map<uint32_t, std::vector<PortBlock>>& optimal_metainfo,
+    std::vector<IP_Table_Entry>& final_ip_table
+) {
+    final_ip_table.clear();
+    
+    // 遍历 merged_ip_table 中的每个 IP 规则
+    for (const auto& ip_rule : merged_ip_table) {
+        IP_Table_Entry entry;
+        
+        // 1) 复制 IP 和 Protocol 信息（与 merged_ip_table 一一对应）
+        entry.Src_IP_lo = ip_rule.Src_IP_lo;
+        entry.Src_IP_hi = ip_rule.Src_IP_hi;
+        entry.Dst_IP_lo = ip_rule.Dst_IP_lo;
+        entry.Dst_IP_hi = ip_rule.Dst_IP_hi;
+        entry.Proto = ip_rule.Proto;
+        
+        // 2) 初始化 LRMID 和 REV_Flag（默认值）
+        entry.Src_ANY_LRMID = 0xFFFF;  // 使用特殊值表示未设置
+        entry.Dst_ANY_LRMID = 0xFFFF;
+        entry.No_ANY_LRMID = 0xFFFF;
+        entry.Src_ANY_REV_Flag = false;
+        entry.Dst_ANY_REV_Flag = false;
+        entry.No_ANY_REV_Flag = false;
+        entry.drop_flag = false;
+        
+        // 3) 从 optimal_metainfo 中查找对应的 LRMID
+        uint32_t lrmid = ip_rule.LRMID;
+        auto it = optimal_metainfo.find(lrmid);
+        
+        if (it != optimal_metainfo.end()) {
+            const auto& port_blocks = it->second;
+            
+            // 遍历该 LRMID 下的所有 PortBlock
+            for (const auto& block : port_blocks) {
+                // 根据 ANY_Flag 分类处理
+                // ANY_Flag: 0=无ANY, 1=仅Src_ANY, 2=仅Dst_ANY, 3=双ANY
+                
+                if (block.ANY_Flag == 3) {
+                    // 双 ANY：设置 drop_flag 为 true
+                    entry.drop_flag = true;
+                    // 双ANY情况下，可以选择跳过其他处理或记录特殊信息
+                    
+                } else if (block.ANY_Flag == 1) {
+                    // 仅源端口是 ANY
+                    entry.Src_ANY_LRMID = static_cast<uint16_t>(lrmid);
+                    entry.Src_ANY_REV_Flag = block.REV_Flag;
+                    
+                } else if (block.ANY_Flag == 2) {
+                    // 仅目标端口是 ANY
+                    entry.Dst_ANY_LRMID = static_cast<uint16_t>(lrmid);
+                    entry.Dst_ANY_REV_Flag = block.REV_Flag;
+                    
+                } else if (block.ANY_Flag == 0) {
+                    // 无 ANY 端口
+                    entry.No_ANY_LRMID = static_cast<uint16_t>(lrmid);
+                    entry.No_ANY_REV_Flag = block.REV_Flag;
+                }
+            }
+        }
+        
+        final_ip_table.push_back(entry);
+    }
+
+    std::cout << "[create_final_IP_table] Created final IP table with " 
+              << final_ip_table.size() << " entries." << std::endl;
+}
+
+void output_final_IP_table(
+    const std::vector<IP_Table_Entry>& final_ip_table,
+    const std::string& output_file
+) {
+    std::ofstream ofs(output_file);
+    if (!ofs.is_open()) {
+        std::cerr << "[ERROR] Failed to open output file: " << output_file << std::endl;
+        return;
+    }
+
+    // 写入表头
+    ofs << std::left
+        << std::setw(20) << "SrcIP"
+        << std::setw(20) << "DstIP"
+        << std::setw(12) << "Protocol"
+        << std::setw(10) << "Src ANY"
+        << std::setw(8) << ""
+        << std::setw(10) << "Dst ANY"
+        << std::setw(8) << ""
+        << std::setw(10) << "No ANY"
+        << std::setw(8) << ""
+        << "\n";
+    
+    ofs << std::left
+        << std::setw(20) << ""
+        << std::setw(20) << ""
+        << std::setw(12) << ""
+        << std::setw(10) << "LRM-ID"
+        << std::setw(8) << "REV"
+        << std::setw(10) << "LRM-ID"
+        << std::setw(8) << "REV"
+        << std::setw(10) << "LRM-ID"
+        << std::setw(8) << "REV"
+        << "\n";
+    
+    ofs << std::string(106, '-') << "\n";
+
+    // 遍历每个 IP 表项
+    for (const auto& entry : final_ip_table) {
+        // 转换 IP 地址为 CIDR 格式
+        std::string src_ip = ip_range_to_cidr(entry.Src_IP_lo, entry.Src_IP_hi);
+        std::string dst_ip = ip_range_to_cidr(entry.Dst_IP_lo, entry.Dst_IP_hi);
+        
+        // 协议转换为十六进制字符串
+        std::ostringstream proto_oss;
+        proto_oss << "0x" << std::hex << std::setw(2) << std::setfill('0') 
+                  << static_cast<int>(entry.Proto);
+        
+        ofs << std::left
+            << std::setw(20) << src_ip
+            << std::setw(20) << dst_ip
+            << std::setw(12) << proto_oss.str();
+        
+        // Src ANY
+        if (entry.Src_ANY_LRMID != 0xFFFF) {
+            ofs << std::setw(10) << entry.Src_ANY_LRMID
+                << std::setw(8) << (entry.Src_ANY_REV_Flag ? "True" : "False");
+        } else {
+            ofs << std::setw(10) << "-"
+                << std::setw(8) << "-";
+        }
+        
+        // Dst ANY
+        if (entry.Dst_ANY_LRMID != 0xFFFF) {
+            ofs << std::setw(10) << entry.Dst_ANY_LRMID
+                << std::setw(8) << (entry.Dst_ANY_REV_Flag ? "True" : "False");
+        } else {
+            ofs << std::setw(10) << "-"
+                << std::setw(8) << "-";
+        }
+        
+        // No ANY
+        if (entry.No_ANY_LRMID != 0xFFFF) {
+            ofs << std::setw(10) << entry.No_ANY_LRMID
+                << std::setw(8) << (entry.No_ANY_REV_Flag ? "True" : "False");
+        } else {
+            ofs << std::setw(10) << "-"
+                << std::setw(8) << "-";
+        }
+        
+        // Drop flag
+        if (entry.drop_flag) {
+            ofs << " [DROP]";
+        }
+        
+        ofs << "\n";
+    }
+
+    ofs.close();
+    std::cout << "[output_final_IP_table] Wrote final IP table to: " << output_file 
+              << " (" << final_ip_table.size() << " entries)" << std::endl;
+}
 
 #ifdef DEMO_LOADER_MAIN
 int main(int argc, char **argv) {
