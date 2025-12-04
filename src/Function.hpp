@@ -106,3 +106,31 @@ void output_final_IP_table(
     const std::vector<IP_Table_Entry>& final_ip_table,
     const std::string& output_file
 );
+
+// ---------------TCAM-based Port Expansion Algorithm---------------------
+struct TCAM_Entry {
+    uint32_t Src_IP_lo, Src_IP_hi;
+    uint32_t Dst_IP_lo, Dst_IP_hi;
+    uint16_t Src_Port_prefix;      // 端口前缀值
+    uint16_t Src_Port_mask;        // 端口掩码
+    uint16_t Dst_Port_prefix;      // 端口前缀值
+    uint16_t Dst_Port_mask;        // 端口掩码
+    uint8_t  Proto;
+    uint16_t action;
+    uint32_t rule_id;              // 原始规则ID
+};
+
+// 将端口范围转换为最小前缀覆盖集合
+std::vector<std::pair<uint16_t, uint16_t>> port_range_to_prefixes(uint16_t lo, uint16_t hi);
+
+// TCAM端口展开算法主函数
+void TCAM_Port_Expansion(
+    const std::vector<Rule5D>& rules,
+    std::vector<TCAM_Entry>& tcam_entries
+);
+
+// 输出TCAM表到文件
+void output_TCAM_table(
+    const std::vector<TCAM_Entry>& tcam_entries,
+    const std::string& output_file
+);

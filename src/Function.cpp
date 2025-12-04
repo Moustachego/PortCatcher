@@ -768,6 +768,187 @@ void output_final_IP_table(
               << " (" << final_ip_table.size() << " entries)" << std::endl;
 }
 
+// ===============================================================================
+// TCAM-based Port Expansion Algorithm Implementation
+// ===============================================================================
+
+// 将端口范围转换为最小前缀覆盖集合（Range to Prefix）
+// 返回 <prefix_value, mask> 对的列表
+std::vector<std::pair<uint16_t, uint16_t>> port_range_to_prefixes(uint16_t lo, uint16_t hi) {
+    std::vector<std::pair<uint16_t, uint16_t>> prefixes;
+    
+    // 如果是全端口范围，返回 0/0（匹配所有）
+    if (lo == 0 && hi == 65535) {
+        prefixes.push_back({0, 0});  // mask=0 表示通配所有位
+        return prefixes;
+    }
+    
+    uint16_t start = lo;
+    
+    while (start <= hi) {
+        // 找到最大的前缀长度（最小的掩码块）
+        int max_prefix_len = 0;
+        
+        // 从最大可能的块开始尝试（16位，即块大小65536）
+        for (int len = 16; len >= 0; len--) {
+            uint16_t block_size = (1 << len);
+            uint16_t mask = ~(block_size - 1);  // 生成掩码
+            uint16_t prefix = start & mask;      // 对齐到块边界
+            uint16_t block_end = prefix + block_size - 1;
+            
+            // 检查这个块是否完全在范围内，且起始点对齐
+            if (prefix == start && block_end <= hi) {
+                max_prefix_len = len;
+                break;
+            }
+        }
+        
+        // 生成该前缀块
+        uint16_t block_size = (1 << max_prefix_len);
+        uint16_t mask = ~(block_size - 1);
+        uint16_t prefix = start & mask;
+        
+        prefixes.push_back({prefix, mask});
+        
+        // 移动到下一个块
+        start = prefix + block_size;
+        
+        // 防止溢出
+        if (start == 0) break;
+    }
+    
+    return prefixes;
+}
+
+// TCAM端口展开算法主函数
+void TCAM_Port_Expansion(
+    const std::vector<Rule5D>& rules,
+    std::vector<TCAM_Entry>& tcam_entries
+) {
+    tcam_entries.clear();
+    
+    std::cout << "[TCAM_Port_Expansion] Starting port range expansion...\n";
+    
+    size_t total_entries = 0;
+    
+    for (size_t rule_idx = 0; rule_idx < rules.size(); rule_idx++) {
+        const auto& rule = rules[rule_idx];
+        
+        // 提取端口范围
+        uint16_t src_port_lo = rule.range[2][0];
+        uint16_t src_port_hi = rule.range[2][1];
+        uint16_t dst_port_lo = rule.range[3][0];
+        uint16_t dst_port_hi = rule.range[3][1];
+        
+        // 将源端口和目标端口范围转换为前缀集合
+        auto src_prefixes = port_range_to_prefixes(src_port_lo, src_port_hi);
+        auto dst_prefixes = port_range_to_prefixes(dst_port_lo, dst_port_hi);
+        
+        // 生成所有源端口前缀 × 目标端口前缀的组合
+        for (const auto& src_prefix : src_prefixes) {
+            for (const auto& dst_prefix : dst_prefixes) {
+                TCAM_Entry entry;
+                
+                // 复制IP信息（IP部分不变，保持掩码形式）
+                entry.Src_IP_lo = rule.range[0][0];
+                entry.Src_IP_hi = rule.range[0][1];
+                entry.Dst_IP_lo = rule.range[1][0];
+                entry.Dst_IP_hi = rule.range[1][1];
+                
+                // 端口前缀和掩码
+                entry.Src_Port_prefix = src_prefix.first;
+                entry.Src_Port_mask = src_prefix.second;
+                entry.Dst_Port_prefix = dst_prefix.first;
+                entry.Dst_Port_mask = dst_prefix.second;
+                
+                // 协议和动作
+                entry.Proto = rule.range[4][0];
+                entry.action = rule.range[5][0];
+                entry.rule_id = rule_idx;
+                
+                tcam_entries.push_back(entry);
+                total_entries++;
+            }
+        }
+    }
+    
+    std::cout << "[TCAM_Port_Expansion] Expansion completed: " 
+              << rules.size() << " rules -> " 
+              << tcam_entries.size() << " TCAM entries\n";
+    std::cout << "[TCAM_Port_Expansion] Average expansion ratio: " 
+              << std::fixed << std::setprecision(2)
+              << (double)tcam_entries.size() / rules.size() << "x\n";
+}
+
+// 输出TCAM表到文件
+void output_TCAM_table(
+    const std::vector<TCAM_Entry>& tcam_entries,
+    const std::string& output_file
+) {
+    std::ofstream ofs(output_file);
+    if (!ofs.is_open()) {
+        std::cerr << "[ERROR] Failed to open output file: " << output_file << std::endl;
+        return;
+    }
+
+    // 写入表头
+    ofs << std::left
+        << std::setw(20) << "SrcIP"
+        << std::setw(20) << "DstIP"
+        << std::setw(18) << "SrcPort(Prefix/Mask)"
+        << std::setw(18) << "DstPort(Prefix/Mask)"
+        << std::setw(10) << "Protocol"
+        << std::setw(10) << "Action"
+        << std::setw(10) << "RuleID"
+        << "\n";
+    
+    ofs << std::string(106, '-') << "\n";
+
+    // 遍历每个 TCAM 表项
+    for (const auto& entry : tcam_entries) {
+        // 转换 IP 地址为 CIDR 格式
+        std::string src_ip = ip_range_to_cidr(entry.Src_IP_lo, entry.Src_IP_hi);
+        std::string dst_ip = ip_range_to_cidr(entry.Dst_IP_lo, entry.Dst_IP_hi);
+        
+        // 端口前缀/掩码格式
+        std::ostringstream src_port_oss, dst_port_oss;
+        if (entry.Src_Port_mask == 0) {
+            src_port_oss << "*";  // 通配所有端口
+        } else {
+            src_port_oss << entry.Src_Port_prefix << "/0x" 
+                        << std::hex << std::setw(4) << std::setfill('0') 
+                        << entry.Src_Port_mask;
+        }
+        
+        if (entry.Dst_Port_mask == 0) {
+            dst_port_oss << "*";
+        } else {
+            dst_port_oss << entry.Dst_Port_prefix << "/0x" 
+                        << std::hex << std::setw(4) << std::setfill('0') 
+                        << entry.Dst_Port_mask;
+        }
+        
+        // 协议转换为十六进制字符串
+        std::ostringstream proto_oss;
+        proto_oss << "0x" << std::hex << std::setw(2) << std::setfill('0') 
+                  << static_cast<int>(entry.Proto);
+        
+        ofs << std::left
+            << std::setw(20) << src_ip
+            << std::setw(20) << dst_ip
+            << std::setw(18) << src_port_oss.str()
+            << std::setw(18) << dst_port_oss.str()
+            << std::setw(10) << proto_oss.str()
+            << std::setw(10) << std::dec << entry.action
+            << std::setw(10) << entry.rule_id
+            << "\n";
+    }
+
+    ofs.close();
+    std::cout << "[output_TCAM_table] Wrote TCAM table to: " << output_file 
+              << " (" << tcam_entries.size() << " entries)" << std::endl;
+}
+
 #ifdef DEMO_LOADER_MAIN
 int main(int argc, char **argv) {
     return 0;

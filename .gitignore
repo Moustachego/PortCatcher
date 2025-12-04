@@ -1,2 +1,12 @@
 /output
 /portcatcher
+
+# ACL_rules 目录：忽略所有内容
+src/ACL_rules/*
+
+# 但保留以下文件
+!src/ACL_rules/test.rules
+!src/ACL_rules/acl_10k.rules
+!src/ACL_rules/acl_100k.rules
+# 编译产物
+*.o

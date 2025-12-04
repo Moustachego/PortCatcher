@@ -71,7 +71,36 @@ int main(int argc, char **argv)
     cout << "[SUCCESS] Final IP Table output completed.\n\n";
 
     cout << "============================================================================\n";
-    cout << "----------------------------------Completed--------------------------------\n";
+    cout << "PortCatcher processing completed successfully!\n";
+    cout << "Input: " << rules.size() << " rules loaded from " << rules_path << "\n";
+    cout << "Output files generated in output/:\n";
+    cout << "  - metainfo.txt\n";
+    cout << "  - Port_table.txt\n";
+    cout << "  - IP_table.txt\n";
+    cout << "============================================================================\n";
+
+    // Partition 2, we design the Port Expansion Algorithm Based on TCAM
+    cout << "============================================================================\n";
+    cout << "-----------------Port Expansion Algorithm Based on TCAM---------------------\n";
+    cout << "============================================================================\n\n";
+
+    cout << "[STEP 1] Running TCAM-based port expansion...\n";
+    vector<TCAM_Entry> tcam_entries;
+    TCAM_Port_Expansion(rules, tcam_entries);
+    cout << "[SUCCESS] TCAM port expansion completed\n\n";
+
+    cout << "[STEP 2] Outputting TCAM table to file...\n";
+    output_TCAM_table(tcam_entries, "output/TCAM_table.txt");
+    cout << "[SUCCESS] TCAM table output completed\n\n";
+
+    cout << "============================================================================\n";
+    cout << "TCAM-based algorithm processing completed successfully!\n";
+    cout << "Input: " << rules.size() << " rules\n";
+    cout << "Output: " << tcam_entries.size() << " TCAM entries\n";
+    cout << "Expansion ratio: " << fixed << setprecision(2) 
+         << (double)tcam_entries.size() / rules.size() << "x\n";
+    cout << "Output files generated in output/:\n";
+    cout << "  - TCAM_table.txt\n";
     cout << "============================================================================\n";
 
     return 0;
